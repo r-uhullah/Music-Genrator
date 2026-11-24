@@ -1,5 +1,6 @@
-# Ignore raw/processed datasets
+# Ignore raw/processed datasets and tests
 data/
+tests/
 
 # Ignore Python virtual environments & cache
 venv/
