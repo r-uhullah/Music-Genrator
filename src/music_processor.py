@@ -1,5 +1,6 @@
 from pathlib import Path
 
+from statistics import median
 import pretty_midi
 
 
@@ -37,17 +38,188 @@ def has_overlapping_notes(note_data):
     return False
 
 
+def extract_melody_candidates(midi_data):
+    candidate_data = []
+    reject_count = 0
+
+    for index, instrument in enumerate(midi_data.instruments):
+        note_data = extract_instrument_notes(instrument)
+        is_overlapping = has_overlapping_notes(note_data)
+
+        if is_overlapping or instrument.is_drum or len(note_data) == 0:
+            reject_count += 1
+            continue
+
+        new_candidate = {
+            "instrument_index": index,
+            "instrument_name": instrument.name,
+            "program": instrument.program,
+            "notes": note_data,
+        }
+
+        candidate_data.append(new_candidate)
+    return candidate_data, reject_count
+
+
+def process_midi_file(midi_path):
+    file_path = Path(midi_path)
+    candidate_list = []
+    rejected = 0
+    success = False
+
+    try:
+        midi_data = pretty_midi.PrettyMIDI(str(file_path))
+        candidate_list, rejected = extract_melody_candidates(midi_data)
+        success = True
+    except Exception as error:
+        print(f"Error in file - {file_path.name}: {error}")
+    return candidate_list, file_path, rejected, success
+
+
+def process_midi_dataset(folder_path):
+    folder = Path(folder_path)
+    training_data = []
+    total_file_scanned = 0
+    successful_scans = 0
+    failed_scans = 0
+    total_rejected = 0
+
+    for item in folder.rglob("*.mid"):
+        if not item.is_file():
+            continue
+        total_file_scanned += 1
+
+        try:
+            candidate_list, file_path, file_rejected, success = process_midi_file(item)
+            if not success:
+                failed_scans += 1
+                continue
+
+            total_rejected += file_rejected
+            successful_scans += 1
+
+            for candidate in candidate_list:
+                new_candidate = {
+                    "source_file": str(file_path),
+                    "instrument_index": candidate["instrument_index"],
+                    "instrument_name": candidate["instrument_name"]
+                    or pretty_midi.program_to_instrument_name(candidate["program"]),
+                    "program": candidate["program"],
+                    "notes": candidate["notes"],
+                }
+
+                training_data.append(new_candidate)
+
+        except Exception as error:
+            print(f"Error in file - {item}: {error}")
+            failed_scans += 1
+
+    statistics = {
+        "total_file": total_file_scanned,
+        "successful_scans": successful_scans,
+        "failed_scans": failed_scans,
+        "total_candidates": len(training_data),
+        "total_rejected_instruments": total_rejected,
+    }
+
+    return training_data, statistics
+
+
+def inspect(training_data):
+    if not training_data:
+        return {
+            "total_candidates": 0,
+            "min_notes": 0,
+            "max_notes": 0,
+            "average_notes": 0,
+            "median_notes": 0,
+            "lowest_pitch": None,
+            "highest_pitch": None,
+            "average_pitch_range": 0,
+            "total_intervals": 0,
+            "repeated_notes": 0,
+            "small_intervals": 0,
+            "large_intervals": 0,
+            "largest_interval": 0,
+            "instrument_counts": {},
+        }
+
+    note_counts = []
+    pitch_ranges = []
+    global_lowest_pitch = None
+    global_highest_pitch = None
+    total_intervals = 0
+    repeated_notes = 0
+    small_intervals = 0
+    large_intervals = 0
+    largest_interval = 0
+    pitch_interval = []
+    instrument_count = {}
+
+    for candidate in training_data:
+        notes = candidate["notes"]
+        note_counts.append(len(notes))
+        instrument_name = pretty_midi.program_to_instrument_name(candidate["program"])
+        instrument_count[instrument_name] = instrument_count.get(instrument_name, 0) + 1
+
+        if notes:
+            pitches = [n["pitch"] for n in notes]
+            cand_low = min(pitches)
+            cand_high = max(pitches)
+            pitch_ranges.append(cand_high - cand_low)
+
+            if global_lowest_pitch is None or cand_low < global_lowest_pitch:
+                global_lowest_pitch = cand_low
+            if global_highest_pitch is None or cand_high > global_highest_pitch:
+                global_highest_pitch = cand_high
+
+            for a, b in zip(pitches, pitches[1:]):
+                interval = b - a
+                pitch_interval.append(interval)
+                total_intervals += 1
+
+                if abs(interval) == 0:
+                    repeated_notes += 1
+
+                if abs(interval) in (1, 2):
+                    small_intervals += 1
+                if abs(interval) > 7:
+                    large_intervals += 1
+
+                largest_interval = max(largest_interval, abs(interval))
+
+    stats = {
+        "total_candidates": len(training_data),
+        "min_notes": min(note_counts),
+        "max_notes": max(note_counts),
+        "average_notes": sum(note_counts) / len(note_counts),
+        "median_notes": median(note_counts),
+        "lowest_pitch": global_lowest_pitch,
+        "highest_pitch": global_highest_pitch,
+        "average_pitch_range": (
+            sum(pitch_ranges) / len(pitch_ranges) if pitch_ranges else 0
+        ),
+        "total_intervals": total_intervals,
+        "repeated_notes": repeated_notes,
+        "small_intervals": small_intervals,
+        "large_intervals": large_intervals,
+        "largest_interval": largest_interval,
+        "average_interval_size": sum(pitch_interval) / len(pitch_interval),
+        "instrument_counts": instrument_count,
+    }
+
+    return stats
+
+
 if __name__ == "__main__":
-    PROJECT_ROOT = Path(__file__).resolve().parent.parent
-    midi_path = PROJECT_ROOT / "data" / "raw" / "MIDI" / "ashover20.mid"
+    training_data, statistics = process_midi_dataset(
+        r"C:\Users\user\Desktop\Code\Python\Projects\Music Generator\data\raw\MIDI"
+    )
 
-    midi_data = pretty_midi.PrettyMIDI(str(midi_path))
-    first_instrument = midi_data.instruments[0]
-
-    note_data = extract_instrument_notes(first_instrument)
-    print("\n\n", has_overlapping_notes(note_data))
-
-    # print(note_data)
-    # print(f"Extracted {len(note_data)} notes from '{first_instrument.name}':\n")
-    # for item in note_data[:5]:
-    #     print(item)
+    print(inspect(training_data))
+    # print(statistics)
+    # for candidate in training_data[:3]:
+    #     print(candidate["source_file"])
+    #     print(candidate["instrument_name"])
+    #     print("Number of notes:", len(candidate["notes"]))
+    #     print("First five notes:", candidate["notes"][:5])
