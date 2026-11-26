@@ -1,3 +1,4 @@
+from copyreg import clear_extension_cache
 from pathlib import Path
 
 from statistics import median
@@ -102,8 +103,7 @@ def process_midi_dataset(folder_path):
                 new_candidate = {
                     "source_file": str(file_path),
                     "instrument_index": candidate["instrument_index"],
-                    "instrument_name": candidate["instrument_name"]
-                    or pretty_midi.program_to_instrument_name(candidate["program"]),
+                    "instrument_name": candidate["instrument_name"],
                     "program": candidate["program"],
                     "notes": candidate["notes"],
                 }
@@ -155,12 +155,22 @@ def inspect(training_data):
     largest_interval = 0
     pitch_interval = []
     instrument_count = {}
+    duration_list = []
+    min_duration = 100
+    max_duration = 0
 
     for candidate in training_data:
         notes = candidate["notes"]
         note_counts.append(len(notes))
         instrument_name = pretty_midi.program_to_instrument_name(candidate["program"])
         instrument_count[instrument_name] = instrument_count.get(instrument_name, 0) + 1
+
+        for note in notes:
+            duration = note["duration"]
+            duration_list.append(duration)
+
+            max_duration = max(max_duration, duration)
+            min_duration = min(min_duration, duration)
 
         if notes:
             pitches = [n["pitch"] for n in notes]
@@ -204,19 +214,70 @@ def inspect(training_data):
         "small_intervals": small_intervals,
         "large_intervals": large_intervals,
         "largest_interval": largest_interval,
-        "average_interval_size": sum(pitch_interval) / len(pitch_interval),
+        "average_interval_size": sum(abs(i) for i in pitch_interval)
+        / len(pitch_interval),
         "instrument_counts": instrument_count,
+        "duration_list": duration_list,
+        "max_duration": max_duration,
+        "min_duration": min_duration,
     }
 
     return stats
+
+
+def quantize_data(training_data):
+    quantized_sequence = []
+
+    for candidates in training_data:
+        notes = candidates["notes"]
+        melody = []
+
+        for note in notes:
+            duration = note["duration"]
+
+            idx = round(duration / 0.125)
+            idx = max(1, min(16, idx))
+            clean_duration = round(idx * 0.125, 3)
+            melody.append((note["pitch"], clean_duration))
+        quantized_sequence.append(melody)
+
+    return quantized_sequence
 
 
 if __name__ == "__main__":
     training_data, statistics = process_midi_dataset(
         r"C:\Users\user\Desktop\Code\Python\Projects\Music Generator\data\raw\MIDI"
     )
+    seqs = quantize_data(training_data)
+    print("Candidates:", len(seqs))
+    print("First candidate length:", len(seqs[0]))
+    print("First 5 notes:", seqs[0][:5])
+    print("Total notes:", sum(len(s) for s in seqs))
+    print(seqs[0])
 
-    print(inspect(training_data))
+    # from collections import Counter
+
+    # # training_data, _ = process_midi_dataset(r"...\data\raw\MIDI")
+    # quantized = quantize_data(training_data)
+
+    # counts = Counter(quantized)
+    # total = sum(counts.values())
+
+    # for dur, count in sorted(counts.items()):
+    #     print(f"{dur:>5.2f}s  {count:>7}  {100*count/total:>5.1f}%")
+    # print("Total:", total)
+    # print(inspect(training_data))
+    # from collections import Counter
+
+    # stats = inspect(training_data)
+
+    # # Count rounded durations
+    # dur_counts = Counter(round(d, 3) for d in stats["duration_list"])
+
+    # # Print top 15
+    # for dur, count in dur_counts.most_common(15):
+    #     pct = 100 * count / len(stats["duration_list"])
+    #     print(f"{dur:>7.3f}s  {count:>7}  {pct:>5.1f}%")
     # print(statistics)
     # for candidate in training_data[:3]:
     #     print(candidate["source_file"])
